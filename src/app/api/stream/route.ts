@@ -28,10 +28,10 @@ export async function GET(req: Request) {
         send(`data: ${JSON.stringify(ev)}\n\n`);
       });
 
-      // Prelude + initial keep-alive comment.
+      // 연결 직후 초기 keep-alive 주석 라인 전송.
       send(`: connected\n\n`);
 
-      // Keep-alive every 15s so intermediaries don't close the idle connection.
+      // 프록시나 라우터가 유휴 연결을 끊지 않도록 15초마다 핑.
       const keepalive = setInterval(() => send(`: ping\n\n`), 15000);
 
       const onAbort = () => {
@@ -41,7 +41,7 @@ export async function GET(req: Request) {
         try {
           controller.close();
         } catch {
-          /* already closed */
+          /* 이미 닫힌 경우 무시 */
         }
       };
       req.signal.addEventListener("abort", onAbort);

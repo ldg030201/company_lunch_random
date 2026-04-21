@@ -1,9 +1,9 @@
 import { EventEmitter } from "events";
 
 /**
- * In-memory pub/sub for a single Node process. Works for local dev and
- * self-hosted persistent deployments; NOT for serverless/Edge environments
- * where requests do not share memory.
+ * 단일 Node 프로세스 안에서 동작하는 인메모리 pub/sub.
+ * 로컬 개발 및 상시 가동 서버 배포에서는 OK, 서버리스/Edge 환경에서는
+ * 요청들이 메모리를 공유하지 않으므로 동작하지 않음.
  */
 
 export type DrawCommand = {
@@ -37,7 +37,7 @@ class Broker {
 
     const next = (this.counts.get(key) ?? 0) + 1;
     this.counts.set(key, next);
-    // Notify everyone (including the new subscriber) of the new count.
+    // 방금 구독한 사람 포함 모두에게 바뀐 접속 인원을 알림.
     this.broadcast(key, { type: "presence", count: next });
 
     return () => {
@@ -63,7 +63,7 @@ class Broker {
   }
 }
 
-// Persist across Next.js dev hot reloads via globalThis.
+// Next.js dev 핫 리로드 중에도 상태를 유지하도록 globalThis에 저장.
 type WithBroker = typeof globalThis & { __lunchBroker?: Broker };
 const g = globalThis as WithBroker;
 export const broker: Broker = g.__lunchBroker ?? (g.__lunchBroker = new Broker());

@@ -25,7 +25,7 @@ export function filterRestaurants(items: Restaurant[], f: FilterState): Restaura
     if (f.foodType.size > 0 && !f.foodType.has(r.foodType)) return false;
     if (f.locationArea.size > 0 && !f.locationArea.has(r.locationArea)) return false;
     if (f.minDaysSinceVisit != null) {
-      // Null daysSinceVisit = never visited → always passes the "at least N days" rule.
+      // daysSinceVisit이 null이면 "한 번도 안 간 곳" → "N일 이상" 조건을 항상 통과시킴.
       if (r.daysSinceVisit != null && r.daysSinceVisit < f.minDaysSinceVisit) return false;
     }
     return true;

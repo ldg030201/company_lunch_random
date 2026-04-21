@@ -12,8 +12,8 @@ export default function Home() {
   const [ui, setUi] = useState<UIState>("hydrating");
   const [sheetId, setSheetId] = useState<string>("");
 
-  // Hydrate: ?sheet=... URL param takes precedence (shared link),
-  // then fall back to localStorage.
+  // 하이드레이션: ?sheet=... URL 파라미터(공유 링크)가 최우선,
+  // 없으면 localStorage에서 복구.
   useEffect(() => {
     try {
       const params = new URLSearchParams(window.location.search);
@@ -23,10 +23,10 @@ export default function Home() {
         try {
           localStorage.setItem(STORAGE_KEY, id);
         } catch {
-          /* ignore */
+          /* 저장 실패는 무시 */
         }
-        // Clean query string so refreshes use the stored value and the
-        // URL stays tidy.
+        // 새로고침 시 저장된 값을 쓰도록, 그리고 URL을 깔끔하게 유지하도록
+        // 쿼리스트링을 제거.
         window.history.replaceState(null, "", window.location.pathname);
         setSheetId(id);
         setUi("connected");
@@ -40,7 +40,7 @@ export default function Home() {
         return;
       }
     } catch {
-      /* ignore storage errors (private mode, etc.) */
+      /* 시크릿 모드 등 localStorage 접근이 막힌 경우 무시 */
     }
     setUi("setup");
   }, []);
@@ -49,7 +49,7 @@ export default function Home() {
     try {
       localStorage.setItem(STORAGE_KEY, id);
     } catch {
-      /* ignore */
+      /* 저장 실패는 무시 */
     }
     setSheetId(id);
     setUi("connected");
@@ -59,7 +59,7 @@ export default function Home() {
     try {
       localStorage.removeItem(STORAGE_KEY);
     } catch {
-      /* ignore */
+      /* 저장 실패는 무시 */
     }
     setSheetId("");
     setUi("setup");

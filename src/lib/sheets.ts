@@ -19,8 +19,8 @@ export function extractSheetId(input: string): string | null {
 }
 
 /**
- * Minimal CSV parser that handles quoted fields, escaped quotes,
- * and CRLF line endings. Good enough for Google Sheets gviz output.
+ * 따옴표 필드, 이스케이프된 따옴표, CRLF 개행을 처리하는 최소 CSV 파서.
+ * Google Sheets gviz 출력에는 충분.
  */
 function parseCsv(csv: string): string[][] {
   const rows: string[][] = [];
@@ -89,7 +89,7 @@ export async function fetchRestaurants(sheetId: string): Promise<Restaurant[]> {
   const rows = parseCsv(csv);
   if (rows.length === 0) return [];
 
-  // rows[0] is header. Skip it.
+  // rows[0]은 헤더 행이므로 건너뜀.
   return rows
     .slice(1)
     .map((r): Restaurant => ({

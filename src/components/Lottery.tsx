@@ -66,7 +66,7 @@ export default function Lottery({ sheetId, onDisconnect }: Props) {
 
     es.onopen = () => setSync("live");
     es.onerror = () => {
-      // EventSource will auto-retry; surface the hiccup in the meantime.
+      // EventSource가 자동 재연결을 시도함. 그동안은 에러 상태로 표시.
       setSync("error");
     };
     es.onmessage = (e) => {
@@ -80,7 +80,7 @@ export default function Lottery({ sheetId, onDisconnect }: Props) {
           setParticipants(ev.count);
         }
       } catch {
-        /* ignore malformed frames */
+        /* 형식이 깨진 프레임은 무시 */
       }
     };
 
@@ -111,8 +111,8 @@ export default function Lottery({ sheetId, onDisconnect }: Props) {
         body: JSON.stringify({ sheetId, cmd }),
       });
     } catch {
-      // Network hiccup — fall back to local-only animation so the clicker
-      // still gets a response.
+      // 네트워크 문제 — 뽑기를 누른 사람이라도 반응을 볼 수 있도록
+      // 로컬에서만 애니메이션을 돌리는 폴백.
       setDraw(cmd);
       setIsSpinning(true);
       setWinner(null);
@@ -136,7 +136,7 @@ export default function Lottery({ sheetId, onDisconnect }: Props) {
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
     } catch {
-      // Fallback: show url in prompt so user can copy manually
+      // 클립보드 API가 막힌 경우 폴백: prompt 창으로 URL을 띄워 수동 복사 가능하게 함.
       window.prompt("링크를 복사하세요:", url);
     }
   };
