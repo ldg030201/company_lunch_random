@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useParams } from "next/navigation";
 import type { RealtimeChannel } from "@supabase/supabase-js";
 import SlotMachine, { DrawCommand } from "@/components/SlotMachine";
 import Filters, { FilterState, emptyFilter, filterRestaurants } from "@/components/Filters";
@@ -16,17 +15,19 @@ type LoadState =
 const ANIM_MS = 4200;
 const LEAD_MS = 350;
 
-export default function RoomPage() {
-  const params = useParams<{ roomId: string }>();
-  const roomId = params.roomId;
+type Props = {
+  sheetId: string;
+  onDisconnect: () => void;
+};
 
+export default function Lottery({ sheetId, onDisconnect }: Props) {
   const [state, setState] = useState<LoadState>({ status: "loading" });
   const [draw, setDraw] = useState<DrawCommand | null>(null);
   const [winner, setWinner] = useState<Restaurant | null>(null);
   const [participants, setParticipants] = useState<number>(1);
-  const [copied, setCopied] = useState(false);
   const [isSpinning, setIsSpinning] = useState(false);
   const [filter, setFilter] = useState<FilterState>(emptyFilter);
+  const [copied, setCopied] = useState(false);
 
   const channelRef = useRef<RealtimeChannel | null>(null);
   const userIdRef = useRef<string>("");
@@ -42,7 +43,8 @@ export default function RoomPage() {
     let cancelled = false;
     (async () => {
       try {
-        const res = await fetch(`/api/restaurants`);
+        setState({ status: "loading" });
+        const res = await fetch(`/api/restaurants?sheetId=${encodeURIComponent(sheetId)}`);
         const json = await res.json();
         if (cancelled) return;
         if (!res.ok) {
@@ -57,14 +59,14 @@ export default function RoomPage() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [sheetId]);
 
   useEffect(() => {
-    if (!roomId) return;
+    if (!sheetId) return;
     const supabase = getSupabase();
     if (!supabase) return;
 
-    const channel = supabase.channel(`room:${roomId}`, {
+    const channel = supabase.channel(`sheet:${sheetId}`, {
       config: { broadcast: { self: true }, presence: { key: userIdRef.current } },
     });
     channelRef.current = channel;
@@ -76,8 +78,8 @@ export default function RoomPage() {
     });
 
     channel.on("presence", { event: "sync" }, () => {
-      const stateSnap = channel.presenceState();
-      setParticipants(Object.keys(stateSnap).length);
+      const snap = channel.presenceState();
+      setParticipants(Object.keys(snap).length);
     });
 
     channel.subscribe(async (status) => {
@@ -90,7 +92,7 @@ export default function RoomPage() {
       channel.unsubscribe();
       channelRef.current = null;
     };
-  }, [roomId]);
+  }, [sheetId]);
 
   const triggerDraw = async () => {
     if (state.status !== "ready" || isSpinning) return;
@@ -111,7 +113,6 @@ export default function RoomPage() {
     if (channel) {
       await channel.send({ type: "broadcast", event: "draw", payload: cmd });
     } else {
-      // Realtime not configured — still animate locally
       setDraw(cmd);
       setIsSpinning(true);
       setWinner(null);
@@ -125,43 +126,53 @@ export default function RoomPage() {
     }
   };
 
-  const shareUrl = typeof window !== "undefined" ? window.location.href : "";
-  const copyLink = async () => {
-    if (!shareUrl) return;
-    await navigator.clipboard.writeText(shareUrl);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
-  };
-
   const slotItems = restaurants.map((r) => r.name);
+
+  const copyShareLink = async () => {
+    if (typeof window === "undefined") return;
+    const url = `${window.location.origin}/?sheet=${encodeURIComponent(sheetId)}`;
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // Fallback: show url in prompt so user can copy manually
+      window.prompt("링크를 복사하세요:", url);
+    }
+  };
 
   return (
     <main className="min-h-screen bg-slate-950 text-white">
       <div className="mx-auto max-w-2xl px-5 py-10">
-        <header className="mb-8 flex items-center justify-between">
-          <a href="/" className="text-sm text-slate-400 hover:text-slate-200">
-            ← 새 방
-          </a>
-          <div className="flex items-center gap-3 text-sm">
+        <header className="mb-8 flex items-center justify-between gap-2">
+          <button
+            onClick={onDisconnect}
+            className="text-sm text-slate-400 transition hover:text-red-300"
+            title="시트 연동 해제"
+          >
+            ← 시트 연동 해제
+          </button>
+          <div className="flex items-center gap-2 text-sm">
             <span className="flex items-center gap-1.5 text-slate-300">
               <span className="relative inline-flex h-2 w-2">
                 <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
                 <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500" />
               </span>
-              {participants}명 접속
+              {participants}명
             </span>
             <button
-              onClick={copyLink}
+              onClick={copyShareLink}
               className="rounded-full bg-white/10 px-3 py-1 text-xs text-white transition hover:bg-white/20"
+              title="이 링크를 공유하면 동료도 자동으로 같은 시트에 연결돼요"
             >
-              {copied ? "복사됨!" : "링크 복사"}
+              {copied ? "복사됨!" : "🔗 링크 공유"}
             </button>
           </div>
         </header>
 
         <h1 className="mb-1 text-center text-3xl font-extrabold">오늘의 점심</h1>
         <p className="mb-8 text-center text-sm text-slate-400">
-          모두가 같은 결과를 동시에 봐요
+          같은 시트를 쓰는 사람들과 결과를 실시간으로 공유해요
         </p>
 
         {state.status === "loading" && (
@@ -170,7 +181,13 @@ export default function RoomPage() {
 
         {state.status === "error" && (
           <div className="rounded-lg bg-red-950/50 p-4 text-center text-sm text-red-300">
-            {state.message}
+            <div className="mb-3">{state.message}</div>
+            <button
+              onClick={onDisconnect}
+              className="rounded-full bg-white/10 px-3 py-1 text-xs text-white hover:bg-white/20"
+            >
+              다른 시트 사용하기
+            </button>
           </div>
         )}
 
@@ -230,13 +247,13 @@ function WinnerCard({ winner }: { winner: Restaurant }) {
       )}
 
       <dl className="mt-4 grid grid-cols-1 gap-2 text-sm sm:grid-cols-2">
-        {winner.locationArea && (
-          <InfoRow label="위치" value={winner.locationArea} />
-        )}
+        {winner.locationArea && <InfoRow label="위치" value={winner.locationArea} />}
         {winner.lastVisit && (
           <InfoRow
             label="마지막 방문"
-            value={`${winner.lastVisit}${winner.daysSinceVisit != null ? ` (${winner.daysSinceVisit}일 전)` : ""}`}
+            value={`${winner.lastVisit}${
+              winner.daysSinceVisit != null ? ` (${winner.daysSinceVisit}일 전)` : ""
+            }`}
           />
         )}
       </dl>

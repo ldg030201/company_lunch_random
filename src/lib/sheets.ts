@@ -1,5 +1,3 @@
-export const DEFAULT_SHEET_ID = "1KVZ-snvssAMZ2SWUuodHszKZPPmwGOmyIKc1JSgSfTM";
-
 export type Restaurant = {
   name: string;
   country: string; // A

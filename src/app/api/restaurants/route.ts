@@ -1,14 +1,19 @@
-import { NextResponse } from "next/server";
-import { DEFAULT_SHEET_ID, fetchRestaurants } from "@/lib/sheets";
+import { NextRequest, NextResponse } from "next/server";
+import { fetchRestaurants } from "@/lib/sheets";
 
 export const revalidate = 60;
 
-export async function GET() {
+export async function GET(req: NextRequest) {
+  const sheetId = req.nextUrl.searchParams.get("sheetId");
+  if (!sheetId) {
+    return NextResponse.json({ error: "sheetId is required" }, { status: 400 });
+  }
+
   try {
-    const restaurants = await fetchRestaurants(DEFAULT_SHEET_ID);
+    const restaurants = await fetchRestaurants(sheetId);
     if (restaurants.length === 0) {
       return NextResponse.json(
-        { error: "시트의 C열('식당 이름')에 식당이 없어요. 식당을 먼저 추가해주세요." },
+        { error: "시트의 C열('식당 이름')에 식당이 없어요." },
         { status: 404 }
       );
     }
