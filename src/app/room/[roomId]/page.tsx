@@ -1,15 +1,17 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import type { RealtimeChannel } from "@supabase/supabase-js";
 import SlotMachine, { DrawCommand } from "@/components/SlotMachine";
+import Filters, { FilterState, emptyFilter, filterRestaurants } from "@/components/Filters";
 import { getSupabase, randomUserId } from "@/lib/supabase";
+import type { Restaurant } from "@/lib/sheets";
 
 type LoadState =
   | { status: "loading" }
   | { status: "error"; message: string }
-  | { status: "ready"; restaurants: string[] };
+  | { status: "ready"; restaurants: Restaurant[] };
 
 const ANIM_MS = 4200;
 const LEAD_MS = 350;
@@ -20,13 +22,21 @@ export default function RoomPage() {
 
   const [state, setState] = useState<LoadState>({ status: "loading" });
   const [draw, setDraw] = useState<DrawCommand | null>(null);
+  const [winner, setWinner] = useState<Restaurant | null>(null);
   const [participants, setParticipants] = useState<number>(1);
   const [copied, setCopied] = useState(false);
   const [isSpinning, setIsSpinning] = useState(false);
+  const [filter, setFilter] = useState<FilterState>(emptyFilter);
+
   const channelRef = useRef<RealtimeChannel | null>(null);
   const userIdRef = useRef<string>("");
-
   if (!userIdRef.current) userIdRef.current = randomUserId();
+
+  const restaurants = state.status === "ready" ? state.restaurants : [];
+  const eligible = useMemo(
+    () => filterRestaurants(restaurants, filter),
+    [restaurants, filter]
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -39,7 +49,7 @@ export default function RoomPage() {
           setState({ status: "error", message: json.error ?? "식당 목록을 불러올 수 없어요." });
           return;
         }
-        setState({ status: "ready", restaurants: json.restaurants });
+        setState({ status: "ready", restaurants: json.restaurants as Restaurant[] });
       } catch (e) {
         if (!cancelled) setState({ status: "error", message: String(e) });
       }
@@ -62,11 +72,12 @@ export default function RoomPage() {
     channel.on("broadcast", { event: "draw" }, ({ payload }) => {
       setDraw(payload as DrawCommand);
       setIsSpinning(true);
+      setWinner(null);
     });
 
     channel.on("presence", { event: "sync" }, () => {
-      const state = channel.presenceState();
-      setParticipants(Object.keys(state).length);
+      const stateSnap = channel.presenceState();
+      setParticipants(Object.keys(stateSnap).length);
     });
 
     channel.subscribe(async (status) => {
@@ -83,8 +94,12 @@ export default function RoomPage() {
 
   const triggerDraw = async () => {
     if (state.status !== "ready" || isSpinning) return;
-    const restaurants = state.restaurants;
-    const winnerIndex = Math.floor(Math.random() * restaurants.length);
+    if (eligible.length === 0) return;
+
+    const winnerRestaurant = eligible[Math.floor(Math.random() * eligible.length)];
+    const winnerIndex = state.restaurants.indexOf(winnerRestaurant);
+    if (winnerIndex < 0) return;
+
     const cmd: DrawCommand = {
       winnerIndex,
       startAt: Date.now() + LEAD_MS,
@@ -99,17 +114,26 @@ export default function RoomPage() {
       // Realtime not configured — still animate locally
       setDraw(cmd);
       setIsSpinning(true);
+      setWinner(null);
+    }
+  };
+
+  const onSpinFinish = () => {
+    setIsSpinning(false);
+    if (draw && state.status === "ready") {
+      setWinner(state.restaurants[draw.winnerIndex] ?? null);
     }
   };
 
   const shareUrl = typeof window !== "undefined" ? window.location.href : "";
-
   const copyLink = async () => {
     if (!shareUrl) return;
     await navigator.clipboard.writeText(shareUrl);
     setCopied(true);
     setTimeout(() => setCopied(false), 1500);
   };
+
+  const slotItems = restaurants.map((r) => r.name);
 
   return (
     <main className="min-h-screen bg-slate-950 text-white">
@@ -136,7 +160,7 @@ export default function RoomPage() {
         </header>
 
         <h1 className="mb-1 text-center text-3xl font-extrabold">오늘의 점심</h1>
-        <p className="mb-10 text-center text-sm text-slate-400">
+        <p className="mb-8 text-center text-sm text-slate-400">
           모두가 같은 결과를 동시에 봐요
         </p>
 
@@ -152,37 +176,90 @@ export default function RoomPage() {
 
         {state.status === "ready" && (
           <>
-            <SlotMachine
-              items={state.restaurants}
-              draw={draw}
-              onFinish={() => setIsSpinning(false)}
+            <Filters
+              restaurants={state.restaurants}
+              filter={filter}
+              setFilter={setFilter}
+              eligibleCount={eligible.length}
             />
 
-            <div className="mt-10 flex justify-center">
+            <SlotMachine items={slotItems} draw={draw} onFinish={onSpinFinish} />
+
+            {winner && !isSpinning && <WinnerCard winner={winner} />}
+
+            <div className="mt-8 flex justify-center">
               <button
                 onClick={triggerDraw}
-                disabled={isSpinning}
+                disabled={isSpinning || eligible.length === 0}
                 className="rounded-full bg-gradient-to-r from-amber-400 to-pink-500 px-10 py-4 text-lg font-bold text-slate-900 shadow-lg shadow-amber-500/30 transition hover:scale-105 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:scale-100"
               >
-                {isSpinning ? "추첨 중..." : "🎰 점심 뽑기"}
+                {isSpinning
+                  ? "추첨 중..."
+                  : eligible.length === 0
+                    ? "조건에 맞는 식당 없음"
+                    : "🎰 점심 뽑기"}
               </button>
             </div>
-
-            <details className="mt-10 rounded-lg bg-white/5 p-4 text-sm text-slate-300">
-              <summary className="cursor-pointer text-slate-400">
-                후보 식당 {state.restaurants.length}곳 보기
-              </summary>
-              <ul className="mt-3 grid grid-cols-2 gap-1.5">
-                {state.restaurants.map((name, i) => (
-                  <li key={i} className="truncate text-slate-200">
-                    • {name}
-                  </li>
-                ))}
-              </ul>
-            </details>
           </>
         )}
       </div>
     </main>
+  );
+}
+
+function WinnerCard({ winner }: { winner: Restaurant }) {
+  const tags = [winner.country, winner.category, winner.foodType].filter((v) => v);
+  const mapQuery = [winner.name, winner.locationArea].filter(Boolean).join(" ");
+  const mapUrl = `https://map.kakao.com/?q=${encodeURIComponent(mapQuery)}`;
+
+  return (
+    <div className="mt-6 rounded-2xl bg-gradient-to-br from-amber-400/20 to-pink-500/20 p-5 ring-1 ring-amber-400/40">
+      <div className="text-2xl font-extrabold text-white">{winner.name}</div>
+
+      {tags.length > 0 && (
+        <div className="mt-2 flex flex-wrap gap-1.5">
+          {tags.map((t) => (
+            <span
+              key={t}
+              className="rounded-full bg-white/10 px-2.5 py-0.5 text-xs text-amber-200"
+            >
+              {t}
+            </span>
+          ))}
+        </div>
+      )}
+
+      <dl className="mt-4 grid grid-cols-1 gap-2 text-sm sm:grid-cols-2">
+        {winner.locationArea && (
+          <InfoRow label="위치" value={winner.locationArea} />
+        )}
+        {winner.lastVisit && (
+          <InfoRow
+            label="마지막 방문"
+            value={`${winner.lastVisit}${winner.daysSinceVisit != null ? ` (${winner.daysSinceVisit}일 전)` : ""}`}
+          />
+        )}
+      </dl>
+
+      <div className="mt-4">
+        <a
+          href={mapUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex items-center gap-1.5 rounded-full bg-white/10 px-3 py-1.5 text-xs text-white transition hover:bg-white/20"
+        >
+          🗺 카카오맵에서 보기 ↗
+        </a>
+      </div>
+    </div>
+  );
+}
+
+function InfoRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <dt className="text-xs text-slate-400">{label}</dt>
+      <dd className="text-slate-100">{value}</dd>
+    </div>
   );
 }
