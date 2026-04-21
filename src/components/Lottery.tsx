@@ -1,16 +1,16 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
-import type { RealtimeChannel } from "@supabase/supabase-js";
+import { useEffect, useMemo, useState } from "react";
 import SlotMachine, { DrawCommand } from "@/components/SlotMachine";
 import Filters, { FilterState, emptyFilter, filterRestaurants } from "@/components/Filters";
-import { getSupabase, randomUserId } from "@/lib/supabase";
 import type { Restaurant } from "@/lib/sheets";
 
 type LoadState =
   | { status: "loading" }
   | { status: "error"; message: string }
   | { status: "ready"; restaurants: Restaurant[] };
+
+type SyncStatus = "connecting" | "live" | "error";
 
 const ANIM_MS = 4200;
 const LEAD_MS = 350;
@@ -28,10 +28,7 @@ export default function Lottery({ sheetId, onDisconnect }: Props) {
   const [isSpinning, setIsSpinning] = useState(false);
   const [filter, setFilter] = useState<FilterState>(emptyFilter);
   const [copied, setCopied] = useState(false);
-
-  const channelRef = useRef<RealtimeChannel | null>(null);
-  const userIdRef = useRef<string>("");
-  if (!userIdRef.current) userIdRef.current = randomUserId();
+  const [sync, setSync] = useState<SyncStatus>("connecting");
 
   const restaurants = state.status === "ready" ? state.restaurants : [];
   const eligible = useMemo(
@@ -63,34 +60,32 @@ export default function Lottery({ sheetId, onDisconnect }: Props) {
 
   useEffect(() => {
     if (!sheetId) return;
-    const supabase = getSupabase();
-    if (!supabase) return;
+    setSync("connecting");
 
-    const channel = supabase.channel(`sheet:${sheetId}`, {
-      config: { broadcast: { self: true }, presence: { key: userIdRef.current } },
-    });
-    channelRef.current = channel;
+    const es = new EventSource(`/api/stream?sheetId=${encodeURIComponent(sheetId)}`);
 
-    channel.on("broadcast", { event: "draw" }, ({ payload }) => {
-      setDraw(payload as DrawCommand);
-      setIsSpinning(true);
-      setWinner(null);
-    });
-
-    channel.on("presence", { event: "sync" }, () => {
-      const snap = channel.presenceState();
-      setParticipants(Object.keys(snap).length);
-    });
-
-    channel.subscribe(async (status) => {
-      if (status === "SUBSCRIBED") {
-        await channel.track({ joinedAt: Date.now() });
+    es.onopen = () => setSync("live");
+    es.onerror = () => {
+      // EventSource will auto-retry; surface the hiccup in the meantime.
+      setSync("error");
+    };
+    es.onmessage = (e) => {
+      try {
+        const ev = JSON.parse(e.data);
+        if (ev.type === "draw") {
+          setDraw(ev.payload as DrawCommand);
+          setIsSpinning(true);
+          setWinner(null);
+        } else if (ev.type === "presence") {
+          setParticipants(ev.count);
+        }
+      } catch {
+        /* ignore malformed frames */
       }
-    });
+    };
 
     return () => {
-      channel.unsubscribe();
-      channelRef.current = null;
+      es.close();
     };
   }, [sheetId]);
 
@@ -109,10 +104,15 @@ export default function Lottery({ sheetId, onDisconnect }: Props) {
       drawId: Math.random().toString(36).slice(2),
     };
 
-    const channel = channelRef.current;
-    if (channel) {
-      await channel.send({ type: "broadcast", event: "draw", payload: cmd });
-    } else {
+    try {
+      await fetch("/api/draw", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sheetId, cmd }),
+      });
+    } catch {
+      // Network hiccup — fall back to local-only animation so the clicker
+      // still gets a response.
       setDraw(cmd);
       setIsSpinning(true);
       setWinner(null);
@@ -153,13 +153,7 @@ export default function Lottery({ sheetId, onDisconnect }: Props) {
             ← 시트 연동 해제
           </button>
           <div className="flex items-center gap-2 text-sm">
-            <span className="flex items-center gap-1.5 text-slate-300">
-              <span className="relative inline-flex h-2 w-2">
-                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
-                <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500" />
-              </span>
-              {participants}명
-            </span>
+            <SyncBadge sync={sync} participants={participants} />
             <button
               onClick={copyShareLink}
               className="rounded-full bg-white/10 px-3 py-1 text-xs text-white transition hover:bg-white/20"
@@ -169,6 +163,12 @@ export default function Lottery({ sheetId, onDisconnect }: Props) {
             </button>
           </div>
         </header>
+
+        {sync === "error" && (
+          <div className="mb-6 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-200">
+            ⚠️ 실시간 연결이 끊겼어요. 자동으로 재연결을 시도 중입니다. (서버가 꺼진 건 아닌지 확인해주세요)
+          </div>
+        )}
 
         <h1 className="mb-1 text-center text-3xl font-extrabold">오늘의 점심</h1>
         <p className="mb-8 text-center text-sm text-slate-400">
@@ -278,5 +278,33 @@ function InfoRow({ label, value }: { label: string; value: string }) {
       <dt className="text-xs text-slate-400">{label}</dt>
       <dd className="text-slate-100">{value}</dd>
     </div>
+  );
+}
+
+function SyncBadge({ sync, participants }: { sync: SyncStatus; participants: number }) {
+  if (sync === "live") {
+    return (
+      <span className="flex items-center gap-1.5 text-slate-300" title="실시간 공유 활성">
+        <span className="relative inline-flex h-2 w-2">
+          <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
+          <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500" />
+        </span>
+        {participants}명
+      </span>
+    );
+  }
+  if (sync === "connecting") {
+    return (
+      <span className="flex items-center gap-1.5 text-slate-400" title="실시간 서버에 연결 중">
+        <span className="h-2 w-2 rounded-full bg-slate-400" />
+        연결 중
+      </span>
+    );
+  }
+  return (
+    <span className="flex items-center gap-1.5 text-red-300" title="실시간 연결 실패">
+      <span className="h-2 w-2 rounded-full bg-red-500" />
+      연결 실패
+    </span>
   );
 }
