@@ -74,12 +74,20 @@ function parseDaysSince(text: string): number | null {
   return m ? parseInt(m[1], 10) : null;
 }
 
-export async function fetchRestaurants(sheetId: string): Promise<Restaurant[]> {
+export async function fetchRestaurants(
+  sheetId: string,
+  opts?: { fresh?: boolean }
+): Promise<Restaurant[]> {
   const url = `https://docs.google.com/spreadsheets/d/${encodeURIComponent(
     sheetId
   )}/gviz/tq?tqx=out:csv`;
 
-  const res = await fetch(url, { next: { revalidate: 60 } });
+  // 기본은 60초 캐시. fresh=true일 때만 Google Sheets까지 새로 다녀옴 (수동 동기화용).
+  const fetchOpts: RequestInit = opts?.fresh
+    ? { cache: "no-store" }
+    : { next: { revalidate: 60 } };
+
+  const res = await fetch(url, fetchOpts);
   if (!res.ok) {
     throw new Error(
       `시트를 불러올 수 없어요 (${res.status}). '링크가 있는 모든 사용자'로 공유됐는지 확인해주세요.`

@@ -130,9 +130,9 @@ export default function Filters({ restaurants, filter, setFilter, eligibleCount 
       </summary>
 
       <div className="mt-4 border-t border-white/10 pt-4">
-        <ChipRow label="음식 나라" values={countries} selected={filter.country} onToggle={toggle("country")} />
+        <ChipRow label="한/중/일식" values={countries} selected={filter.country} onToggle={toggle("country")} />
         <ChipRow label="음식 대분류" values={categories} selected={filter.category} onToggle={toggle("category")} />
-        <ChipRow label="음식 종류" values={foodTypes} selected={filter.foodType} onToggle={toggle("foodType")} />
+        <ChipRow label="주 음식" values={foodTypes} selected={filter.foodType} onToggle={toggle("foodType")} />
         <ChipRow label="위치" values={areas} selected={filter.locationArea} onToggle={toggle("locationArea")} />
 
         <div className="mb-3">

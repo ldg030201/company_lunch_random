@@ -27,6 +27,8 @@ export default function Lottery({ sheetId, onDisconnect }: Props) {
   const [filter, setFilter] = useState<FilterState>(emptyFilter);
   const [copied, setCopied] = useState(false);
   const [sync, setSync] = useState<SyncStatus>("connecting");
+  const [syncing, setSyncing] = useState(false);
+  const [justSynced, setJustSynced] = useState(false);
 
   const restaurants = state.status === "ready" ? state.restaurants : [];
   const eligible = useMemo(
@@ -39,7 +41,9 @@ export default function Lottery({ sheetId, onDisconnect }: Props) {
     (async () => {
       try {
         setState({ status: "loading" });
-        const res = await fetch(`/api/restaurants?sheetId=${encodeURIComponent(sheetId)}`);
+        const res = await fetch(
+          `/api/restaurants?sheetId=${encodeURIComponent(sheetId)}`
+        );
         const json = await res.json();
         if (cancelled) return;
         if (!res.ok) {
@@ -55,6 +59,32 @@ export default function Lottery({ sheetId, onDisconnect }: Props) {
       cancelled = true;
     };
   }, [sheetId]);
+
+  // 수동 동기화 — fresh=1로 Google Sheets까지 강제 재조회.
+  const handleSync = async () => {
+    if (syncing) return;
+    setSyncing(true);
+    try {
+      const res = await fetch(
+        `/api/restaurants?sheetId=${encodeURIComponent(sheetId)}&fresh=1`
+      );
+      const json = await res.json();
+      if (!res.ok) {
+        setState({
+          status: "error",
+          message: json.error ?? "식당 목록을 불러올 수 없어요.",
+        });
+        return;
+      }
+      setState({ status: "ready", restaurants: json.restaurants as Restaurant[] });
+      setJustSynced(true);
+      setTimeout(() => setJustSynced(false), 1500);
+    } catch (e) {
+      setState({ status: "error", message: String(e) });
+    } finally {
+      setSyncing(false);
+    }
+  };
 
   useEffect(() => {
     if (!sheetId) return;
@@ -150,6 +180,23 @@ export default function Lottery({ sheetId, onDisconnect }: Props) {
           </button>
           <div className="flex items-center gap-2 text-sm">
             <SyncBadge sync={sync} participants={participants} />
+            <button
+              onClick={handleSync}
+              disabled={syncing}
+              className="rounded-full bg-white/10 px-3 py-1 text-xs text-white transition hover:bg-white/20 disabled:cursor-wait disabled:opacity-60"
+              title="시트를 다시 불러와서 최신 식당 목록으로 갱신"
+            >
+              {syncing ? (
+                <span className="inline-flex items-center gap-1">
+                  <span className="inline-block h-2 w-2 animate-spin rounded-full border border-white/40 border-t-white" />
+                  동기화 중
+                </span>
+              ) : justSynced ? (
+                "최신!"
+              ) : (
+                "🔄 동기화"
+              )}
+            </button>
             <button
               onClick={copyShareLink}
               className="rounded-full bg-white/10 px-3 py-1 text-xs text-white transition hover:bg-white/20"

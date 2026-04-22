@@ -136,7 +136,7 @@ function Setup({ onConnect }: { onConnect: (sheetId: string) => void }) {
             <ul className="space-y-0.5">
               <li>• 공유 설정: <strong>&quot;링크가 있는 모든 사용자 · 뷰어&quot;</strong></li>
               <li>
-                • 컬럼 구조: A 음식 나라 / B 대분류 / <strong>C 식당 이름</strong> / D 종류 / E 위치 / F 위치 상세 / G 마지막 방문일 / H 방문일로부터
+                • 컬럼 구조: A 한/중/일식 / B 음식 대분류 / <strong>C 식당 이름</strong> / D 주 음식 / E 대략 위치 / F 위치 상세 / G 마지막 방문일 / H 마지막 방문일로부터
               </li>
             </ul>
           </div>
