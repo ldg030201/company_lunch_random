@@ -3,72 +3,166 @@
 import { motion, useAnimationControls } from "framer-motion";
 import { useEffect, useRef, useState } from "react";
 import confetti from "canvas-confetti";
-
-export type DrawCommand = {
-  winnerIndex: number;
-  startAt: number;
-  durationMs: number;
-  drawId: string;
-};
+import type { SpinEvent } from "@/lib/broker";
 
 type Props = {
   items: string[];
-  draw: DrawCommand | null;
+  event: SpinEvent | null;
   onFinish?: (winner: string) => void;
 };
 
+// 아이템 한 행의 높이(px). 컨테이너는 3행(= 264px)만 보여줌.
 const ROW_HEIGHT = 88;
-const LOOPS = 6;
+// 렌더할 반복 횟수. wrap 로직 덕에 8이면 충분 (작은 items.length도 커버).
+const RENDER_CYCLES = 8;
 
-// 포인터 크기 (px).
+// 포인터(룰렛 지시봉) 기하학 파라미터.
 const POINTER_HEIGHT = 40; // 막대(28) + 삼각형(12)
 const OUTER_PADDING_TOP = 40;
-// 정지 상태일 때 포인터의 뾰족한 끝이 가운데 슬롯 행의 위쪽 모서리에 닿도록.
-// 외곽 래퍼 기준으로 가운데 행의 시작 y = OUTER_PADDING_TOP + ROW_HEIGHT.
 const POINTER_REST_Y = OUTER_PADDING_TOP + ROW_HEIGHT - POINTER_HEIGHT;
 const POINTER_START_Y = -20; // 외곽 래퍼 위쪽 바깥에서 출발
 
-// 착지할 때 튕기는 오버슛 거리 (px).
+// 자유 스핀 속도 (px/s) 및 물리 상수.
+const INITIAL_VELOCITY = 1600;
+const BOOST_INCREMENT = 600;
+const MAX_VELOCITY = 6000;
+const FRICTION = 300; // px/s^2
+// settle 때 최소 이동 거리 — 너무 가까우면 "그냥 약간 보정"처럼 보임. 여유 있게.
+const MIN_SETTLE_DISTANCE_PX = 700;
+// settle 끝부분 바운스를 위한 오버슛 거리.
 const OVERSHOOT_PX = 14;
 
-export default function SlotMachine({ items, draw, onFinish }: Props) {
+type Phase = "idle" | "spinning" | "settling" | "done";
+
+export default function SlotMachine({ items, event, onFinish }: Props) {
   const reelControls = useAnimationControls();
   const pointerControls = useAnimationControls();
-  const [phase, setPhase] = useState<"idle" | "spinning" | "done">("idle");
+  const [phase, setPhase] = useState<Phase>("idle");
   const [winner, setWinner] = useState<string | null>(null);
-  const lastDrawRef = useRef<string | null>(null);
 
-  useEffect(() => {
-    if (!draw || items.length === 0) return;
-    if (lastDrawRef.current === draw.drawId) return;
-    lastDrawRef.current = draw.drawId;
+  // 릴 상태 — RAF 루프에서 변경. React 리렌더와 무관해야 하므로 전부 ref.
+  const reelYRef = useRef(0);
+  const velocityRef = useRef(0);
+  const rafRef = useRef<number | null>(null);
+  const lastFrameRef = useRef<number>(0);
+  const settleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-    let cancelled = false;
-    const run = async () => {
-      setPhase("spinning");
-      setWinner(null);
+  // 처리한 이벤트 키 dedup (React StrictMode 이중 실행 대비).
+  const handledRef = useRef<{
+    startedSession: string | null;
+    lastBoostAt: number;
+    settledSession: string | null;
+  }>({
+    startedSession: null,
+    lastBoostAt: -1,
+    settledSession: null,
+  });
 
-      const delay = Math.max(0, draw.startAt - Date.now());
-      if (delay > 0) await new Promise((r) => setTimeout(r, delay));
-      if (cancelled) return;
+  // wrap: cycle 길이로 y를 감아서 [-cycle, 0] 범위로 정규화.
+  const wrapY = (y: number, cycle: number): number => {
+    if (cycle <= 0) return 0;
+    const m = y % cycle;
+    // m은 y가 음수면 (-cycle, 0], 양수면 [0, cycle) 범위. 항상 음의 영역으로 맞춤.
+    return m > 0 ? m - cycle : m;
+  };
 
-      // 릴 계산: 3행짜리 뷰포트의 가운데 슬롯은 릴을 -N * ROW_HEIGHT만큼 이동하면
-      // 인덱스 N+1번 아이템을 보여줌. 따라서 당첨 행을 가운데로 맞추려면
-      // -(winnerRow - 1) * ROW_HEIGHT만큼 이동해야 함.
-      const winnerRow = items.length * LOOPS + draw.winnerIndex;
-      const targetY = -(winnerRow - 1) * ROW_HEIGHT;
+  const stopRaf = () => {
+    if (rafRef.current != null) {
+      cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
+    }
+  };
 
-      // 포인터 낙하 — 스핀 시작과 동시에 진행.
-      pointerControls.start({
-        x: "-50%",
-        y: POINTER_REST_Y,
-        opacity: 1,
-        transition: { duration: 0.45, ease: [0.2, 1.3, 0.4, 1] },
-      });
+  const cancelPendingSettle = () => {
+    if (settleTimerRef.current != null) {
+      clearTimeout(settleTimerRef.current);
+      settleTimerRef.current = null;
+    }
+  };
 
-      // 메인 스핀: 목표보다 약간 더 지나쳐 가서 스프링으로 되돌아올 수 있게 함.
-      const mainDuration = (draw.durationMs / 1000) * 0.92;
+  // 자유 스핀 시작. 기존에 돌던 것이 있으면 리셋.
+  const startSpin = () => {
+    stopRaf();
+    cancelPendingSettle();
+    reelControls.stop();
 
+    setPhase("spinning");
+    setWinner(null);
+    velocityRef.current = INITIAL_VELOCITY;
+    reelYRef.current = 0;
+    reelControls.set({ y: 0 });
+
+    // 포인터 낙하.
+    pointerControls.stop();
+    pointerControls.set({ x: "-50%", y: POINTER_START_Y, opacity: 0 });
+    pointerControls.start({
+      x: "-50%",
+      y: POINTER_REST_Y,
+      opacity: 1,
+      transition: { duration: 0.4, ease: [0.2, 1.3, 0.4, 1] },
+    });
+
+    const cycle = items.length * ROW_HEIGHT;
+    lastFrameRef.current = performance.now();
+    const step = (now: number) => {
+      const dt = (now - lastFrameRef.current) / 1000;
+      lastFrameRef.current = now;
+
+      velocityRef.current = Math.max(
+        0,
+        velocityRef.current - FRICTION * dt
+      );
+      reelYRef.current -= velocityRef.current * dt;
+
+      // 시각적 y는 wrap — 아이템이 반복되므로 시각적 점프가 보이지 않음.
+      reelControls.set({ y: wrapY(reelYRef.current, cycle) });
+      rafRef.current = requestAnimationFrame(step);
+    };
+    rafRef.current = requestAnimationFrame(step);
+  };
+
+  const boost = () => {
+    velocityRef.current = Math.min(
+      MAX_VELOCITY,
+      velocityRef.current + BOOST_INCREMENT
+    );
+  };
+
+  const startSettle = (
+    winnerIndex: number,
+    startAt: number,
+    durationMs: number
+  ) => {
+    cancelPendingSettle();
+    const delay = Math.max(0, startAt - Date.now());
+    settleTimerRef.current = setTimeout(() => {
+      settleTimerRef.current = null;
+      performSettle(winnerIndex, durationMs);
+    }, delay);
+  };
+
+  const performSettle = async (winnerIndex: number, durationMs: number) => {
+    stopRaf();
+    setPhase("settling");
+
+    const cycle = items.length * ROW_HEIGHT;
+    const currentVisibleY = wrapY(reelYRef.current, cycle);
+    reelControls.set({ y: currentVisibleY });
+
+    // 가운데 슬롯에 winnerIndex가 오도록 하는 y의 조건:
+    //   y ≡ (1 - winnerIndex) * ROW_HEIGHT  (mod cycle)
+    // 또한 이동이 충분히 보이도록 target < currentVisibleY - MIN_SETTLE_DISTANCE_PX.
+    const baseTargetY = (1 - winnerIndex) * ROW_HEIGHT;
+    // [-cycle, 0] 범위로 정규화된 base.
+    const normalizedBase = baseTargetY > 0 ? baseTargetY - cycle : baseTargetY;
+    const minTarget = currentVisibleY - MIN_SETTLE_DISTANCE_PX;
+    const k = Math.ceil((normalizedBase - minTarget) / cycle);
+    const targetY = normalizedBase - k * cycle;
+
+    const mainDuration = (durationMs / 1000) * 0.92;
+
+    try {
+      // 1단: 목표 직전까지 감속 (살짝 오버슛).
       await reelControls.start({
         y: targetY - OVERSHOOT_PX,
         transition: {
@@ -76,40 +170,67 @@ export default function SlotMachine({ items, draw, onFinish }: Props) {
           ease: [0.15, 0.75, 0.2, 1],
         },
       });
-      if (cancelled) return;
-
-      // 부드러운 스프링으로 정확한 목표 지점에 안착.
+      // 2단: 스프링으로 정확한 목표에 안착.
       await reelControls.start({
         y: targetY,
         transition: { type: "spring", stiffness: 320, damping: 14, mass: 0.8 },
       });
-      if (cancelled) return;
+    } catch {
+      // 애니메이션이 다른 start()에 의해 취소되면 무시.
+      return;
+    }
 
-      setPhase("done");
-      const picked = items[draw.winnerIndex];
-      setWinner(picked);
-      onFinish?.(picked);
+    // 다음 스핀이 이 지점부터 이어지도록 ref 업데이트.
+    reelYRef.current = targetY;
+    setPhase("done");
+    const picked = items[winnerIndex];
+    setWinner(picked);
+    onFinish?.(picked);
 
-      confetti({
-        particleCount: 120,
-        spread: 75,
-        origin: { y: 0.55 },
-        colors: ["#fde68a", "#f472b6", "#60a5fa", "#34d399"],
-      });
-    };
+    confetti({
+      particleCount: 120,
+      spread: 75,
+      origin: { y: 0.55 },
+      colors: ["#fde68a", "#f472b6", "#60a5fa", "#34d399"],
+    });
+  };
 
-    reelControls.stop();
-    reelControls.set({ y: 0 });
-    pointerControls.stop();
-    pointerControls.set({ x: "-50%", y: POINTER_START_Y, opacity: 0 });
-    run();
+  // 이벤트 디스패치.
+  useEffect(() => {
+    if (!event || items.length === 0) return;
 
+    if (event.type === "spin:start") {
+      if (handledRef.current.startedSession === event.sessionId) return;
+      handledRef.current.startedSession = event.sessionId;
+      handledRef.current.lastBoostAt = -1;
+      handledRef.current.settledSession = null;
+      startSpin();
+    } else if (event.type === "spin:boost") {
+      if (event.boostAt <= handledRef.current.lastBoostAt) return;
+      handledRef.current.lastBoostAt = event.boostAt;
+      // 스핀 중이 아니면 무시 (stale boost).
+      if (phase === "spinning") boost();
+    } else if (event.type === "spin:settle") {
+      if (handledRef.current.settledSession === event.sessionId) return;
+      handledRef.current.settledSession = event.sessionId;
+      startSettle(event.winnerIndex, event.startAt, event.durationMs);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [event]);
+
+  // 언마운트 시 모든 진행 중 작업 정리.
+  useEffect(() => {
     return () => {
-      cancelled = true;
+      stopRaf();
+      cancelPendingSettle();
     };
-  }, [draw, items, reelControls, pointerControls, onFinish]);
+  }, []);
 
-  const reel = items.length > 0 ? Array.from({ length: LOOPS + 2 }).flatMap(() => items) : [];
+  // 릴에 렌더할 아이템 — RENDER_CYCLES 만큼 반복.
+  const reel =
+    items.length > 0
+      ? Array.from({ length: RENDER_CYCLES }).flatMap(() => items)
+      : [];
 
   return (
     <div
@@ -154,7 +275,10 @@ export default function SlotMachine({ items, draw, onFinish }: Props) {
 
       <div className="mt-6 h-10 text-center">
         {phase === "spinning" && (
-          <p className="animate-pulse text-sm text-amber-300">돌리는 중...</p>
+          <p className="animate-pulse text-sm text-amber-300">연타하면 더 빨라져요!</p>
+        )}
+        {phase === "settling" && (
+          <p className="text-sm text-amber-300">멈추는 중...</p>
         )}
         {phase === "done" && winner && (
           <motion.p

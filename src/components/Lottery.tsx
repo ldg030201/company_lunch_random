@@ -1,9 +1,11 @@
 "use client";
 
+import { motion } from "framer-motion";
 import { useEffect, useMemo, useState } from "react";
-import SlotMachine, { DrawCommand } from "@/components/SlotMachine";
+import SlotMachine from "@/components/SlotMachine";
 import Filters, { FilterState, emptyFilter, filterRestaurants } from "@/components/Filters";
 import type { Restaurant } from "@/lib/sheets";
+import type { SpinEvent } from "@/lib/broker";
 
 type LoadState =
   | { status: "loading" }
@@ -12,9 +14,6 @@ type LoadState =
 
 type SyncStatus = "connecting" | "live" | "error";
 
-const ANIM_MS = 4200;
-const LEAD_MS = 350;
-
 type Props = {
   sheetId: string;
   onDisconnect: () => void;
@@ -22,10 +21,9 @@ type Props = {
 
 export default function Lottery({ sheetId, onDisconnect }: Props) {
   const [state, setState] = useState<LoadState>({ status: "loading" });
-  const [draw, setDraw] = useState<DrawCommand | null>(null);
+  const [spinEvent, setSpinEvent] = useState<SpinEvent | null>(null);
   const [winner, setWinner] = useState<Restaurant | null>(null);
   const [participants, setParticipants] = useState<number>(1);
-  const [isSpinning, setIsSpinning] = useState(false);
   const [filter, setFilter] = useState<FilterState>(emptyFilter);
   const [copied, setCopied] = useState(false);
   const [sync, setSync] = useState<SyncStatus>("connecting");
@@ -72,12 +70,16 @@ export default function Lottery({ sheetId, onDisconnect }: Props) {
     es.onmessage = (e) => {
       try {
         const ev = JSON.parse(e.data);
-        if (ev.type === "draw") {
-          setDraw(ev.payload as DrawCommand);
-          setIsSpinning(true);
-          setWinner(null);
-        } else if (ev.type === "presence") {
+        if (ev.type === "presence") {
           setParticipants(ev.count);
+        } else if (
+          ev.type === "spin:start" ||
+          ev.type === "spin:boost" ||
+          ev.type === "spin:settle"
+        ) {
+          // SlotMachine은 event prop의 변경을 보고 디스패치.
+          setSpinEvent(ev as SpinEvent);
+          if (ev.type === "spin:start") setWinner(null);
         }
       } catch {
         /* 형식이 깨진 프레임은 무시 */
@@ -89,41 +91,35 @@ export default function Lottery({ sheetId, onDisconnect }: Props) {
     };
   }, [sheetId]);
 
-  const triggerDraw = async () => {
-    if (state.status !== "ready" || isSpinning) return;
+  const triggerClick = async () => {
+    if (state.status !== "ready") return;
     if (eligible.length === 0) return;
 
-    const winnerRestaurant = eligible[Math.floor(Math.random() * eligible.length)];
-    const winnerIndex = state.restaurants.indexOf(winnerRestaurant);
-    if (winnerIndex < 0) return;
-
-    const cmd: DrawCommand = {
-      winnerIndex,
-      startAt: Date.now() + LEAD_MS,
-      durationMs: ANIM_MS,
-      drawId: Math.random().toString(36).slice(2),
-    };
+    // 필터 반영 — 서버가 이 인덱스들 중 하나를 당첨자로 뽑음.
+    // 이미 진행 중인 세션이면 서버는 allowedIndices를 무시하고 부스트만 적용.
+    const allowedIndices = eligible
+      .map((r) => state.restaurants.indexOf(r))
+      .filter((i) => i >= 0);
 
     try {
       await fetch("/api/draw", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sheetId, cmd }),
+        body: JSON.stringify({
+          sheetId,
+          restaurantCount: state.restaurants.length,
+          allowedIndices,
+        }),
       });
     } catch {
-      // 네트워크 문제 — 뽑기를 누른 사람이라도 반응을 볼 수 있도록
-      // 로컬에서만 애니메이션을 돌리는 폴백.
-      setDraw(cmd);
-      setIsSpinning(true);
-      setWinner(null);
+      // 네트워크 실패는 일단 조용히. 재클릭하면 다시 시도됨.
     }
   };
 
-  const onSpinFinish = () => {
-    setIsSpinning(false);
-    if (draw && state.status === "ready") {
-      setWinner(state.restaurants[draw.winnerIndex] ?? null);
-    }
+  const onSpinFinish = (winnerName: string) => {
+    if (state.status !== "ready") return;
+    const r = state.restaurants.find((x) => x.name === winnerName);
+    if (r) setWinner(r);
   };
 
   const slotItems = restaurants.map((r) => r.name);
@@ -200,22 +196,21 @@ export default function Lottery({ sheetId, onDisconnect }: Props) {
               eligibleCount={eligible.length}
             />
 
-            <SlotMachine items={slotItems} draw={draw} onFinish={onSpinFinish} />
+            <SlotMachine items={slotItems} event={spinEvent} onFinish={onSpinFinish} />
 
-            {winner && !isSpinning && <WinnerCard winner={winner} />}
+            {winner && spinEvent?.type !== "spin:start" && spinEvent?.type !== "spin:boost" && (
+              <WinnerCard winner={winner} />
+            )}
 
             <div className="mt-8 flex justify-center">
-              <button
-                onClick={triggerDraw}
-                disabled={isSpinning || eligible.length === 0}
+              <motion.button
+                onClick={triggerClick}
+                disabled={eligible.length === 0}
+                whileTap={{ scale: 0.93 }}
                 className="rounded-full bg-gradient-to-r from-amber-400 to-pink-500 px-10 py-4 text-lg font-bold text-slate-900 shadow-lg shadow-amber-500/30 transition hover:scale-105 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:scale-100"
               >
-                {isSpinning
-                  ? "추첨 중..."
-                  : eligible.length === 0
-                    ? "조건에 맞는 식당 없음"
-                    : "🎰 점심 뽑기"}
-              </button>
+                {eligible.length === 0 ? "조건에 맞는 식당 없음" : "🎰 뽑기 (연타!)"}
+              </motion.button>
             </div>
           </>
         )}

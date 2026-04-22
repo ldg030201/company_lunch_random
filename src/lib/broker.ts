@@ -6,16 +6,21 @@ import { EventEmitter } from "events";
  * 요청들이 메모리를 공유하지 않으므로 동작하지 않음.
  */
 
-export type DrawCommand = {
-  winnerIndex: number;
-  startAt: number;
-  durationMs: number;
-  drawId: string;
-};
+// 세션 기반 스핀 이벤트. 서버가 세션 수명 주기를 관리하고 아래 3종을 브로드캐스트.
+export type SpinEvent =
+  | { type: "spin:start"; sessionId: string; startAt: number }
+  | { type: "spin:boost"; sessionId: string; boostAt: number; boostCount: number }
+  | {
+      type: "spin:settle";
+      sessionId: string;
+      winnerIndex: number;
+      startAt: number;
+      durationMs: number;
+    };
 
 export type BrokerEvent =
-  | { type: "draw"; payload: DrawCommand }
-  | { type: "presence"; count: number };
+  | { type: "presence"; count: number }
+  | SpinEvent;
 
 class Broker {
   private emitters = new Map<string, EventEmitter>();
