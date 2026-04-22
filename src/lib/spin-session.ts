@@ -1,4 +1,4 @@
-import { broker } from "./broker";
+import {broker} from "./broker";
 
 /**
  * 한 시트(방)당 하나의 활성 스핀 세션을 관리.
@@ -7,13 +7,13 @@ import { broker } from "./broker";
  */
 
 type Session = {
-  sheetId: string;
-  sessionId: string;
-  winnerIndex: number;
-  startedAt: number;
-  boostCount: number;
-  idleTimer: ReturnType<typeof setTimeout> | null;
-  settled: boolean;
+    sheetId: string;
+    sessionId: string;
+    winnerIndex: number;
+    startedAt: number;
+    boostCount: number;
+    idleTimer: ReturnType<typeof setTimeout> | null;
+    settled: boolean;
 };
 
 // 아이들 타이머: 이 시간 동안 클릭이 없으면 settle.
@@ -29,14 +29,14 @@ const MAX_SETTLE_MS = 5500;
 const MAX_SESSION_MS = 20_000;
 
 function newSessionId(): string {
-  return Math.random().toString(36).slice(2, 10);
+    return Math.random().toString(36).slice(2, 10);
 }
 
 function pickWinner(allowedIndices: number[], restaurantCount: number): number {
-  if (allowedIndices.length > 0) {
-    return allowedIndices[Math.floor(Math.random() * allowedIndices.length)];
-  }
-  return Math.floor(Math.random() * restaurantCount);
+    if (allowedIndices.length > 0) {
+        return allowedIndices[Math.floor(Math.random() * allowedIndices.length)];
+    }
+    return Math.floor(Math.random() * restaurantCount);
 }
 
 // Next.js dev 핫 리로드 간에도 세션 상태가 유지되도록 globalThis에 저장.
@@ -46,84 +46,84 @@ const g = globalThis as WithSessions;
 const sessions: SessionsMap = g.__lunchSessions ?? (g.__lunchSessions = new Map());
 
 function scheduleSettle(session: Session): void {
-  if (session.idleTimer) clearTimeout(session.idleTimer);
-  const elapsed = Date.now() - session.startedAt;
-  const budget = Math.max(0, MAX_SESSION_MS - elapsed);
-  // 최대 세션 시간을 넘어가면 즉시 settle.
-  if (budget === 0) {
-    settleNow(session);
-    return;
-  }
-  const delay = Math.min(IDLE_TIMEOUT_MS, budget);
-  session.idleTimer = setTimeout(() => settleNow(session), delay);
+    if (session.idleTimer) clearTimeout(session.idleTimer);
+    const elapsed = Date.now() - session.startedAt;
+    const budget = Math.max(0, MAX_SESSION_MS - elapsed);
+    // 최대 세션 시간을 넘어가면 즉시 settle.
+    if (budget === 0) {
+        settleNow(session);
+        return;
+    }
+    const delay = Math.min(IDLE_TIMEOUT_MS, budget);
+    session.idleTimer = setTimeout(() => settleNow(session), delay);
 }
 
 function settleNow(session: Session): void {
-  if (session.settled) return;
-  session.settled = true;
-  if (session.idleTimer) {
-    clearTimeout(session.idleTimer);
-    session.idleTimer = null;
-  }
-  const now = Date.now();
-  const durationMs = Math.min(
-    MAX_SETTLE_MS,
-    BASE_SETTLE_MS + session.boostCount * PER_BOOST_MS
-  );
-  broker.broadcast(session.sheetId, {
-    type: "spin:settle",
-    sessionId: session.sessionId,
-    winnerIndex: session.winnerIndex,
-    startAt: now + SETTLE_LEAD_MS,
-    durationMs,
-  });
-  // 늦게 붙은 클라이언트가 끝난 세션을 못 받는 일을 막기 위해, 세션은 잠시 뒤 제거.
-  setTimeout(() => {
-    const current = sessions.get(session.sheetId);
-    if (current && current.sessionId === session.sessionId) {
-      sessions.delete(session.sheetId);
+    if (session.settled) return;
+    session.settled = true;
+    if (session.idleTimer) {
+        clearTimeout(session.idleTimer);
+        session.idleTimer = null;
     }
-  }, durationMs + 2000);
+    const now = Date.now();
+    const durationMs = Math.min(
+        MAX_SETTLE_MS,
+        BASE_SETTLE_MS + session.boostCount * PER_BOOST_MS
+    );
+    broker.broadcast(session.sheetId, {
+        type: "spin:settle",
+        sessionId: session.sessionId,
+        winnerIndex: session.winnerIndex,
+        startAt: now + SETTLE_LEAD_MS,
+        durationMs,
+    });
+    // 늦게 붙은 클라이언트가 끝난 세션을 못 받는 일을 막기 위해, 세션은 잠시 뒤 제거.
+    setTimeout(() => {
+        const current = sessions.get(session.sheetId);
+        if (current && current.sessionId === session.sessionId) {
+            sessions.delete(session.sheetId);
+        }
+    }, durationMs + 2000);
 }
 
 export function handleClick(
-  sheetId: string,
-  restaurantCount: number,
-  allowedIndices: number[]
+    sheetId: string,
+    restaurantCount: number,
+    allowedIndices: number[]
 ): { sessionId: string; isNew: boolean } {
-  const now = Date.now();
-  let session = sessions.get(sheetId);
+    const now = Date.now();
+    let session = sessions.get(sheetId);
 
-  // 기존 세션이 이미 settled 된 상태면 새 세션을 만듦.
-  if (!session || session.settled) {
-    const winnerIndex = pickWinner(allowedIndices, restaurantCount);
-    session = {
-      sheetId,
-      sessionId: newSessionId(),
-      winnerIndex,
-      startedAt: now,
-      boostCount: 0,
-      idleTimer: null,
-      settled: false,
-    };
-    sessions.set(sheetId, session);
+    // 기존 세션이 이미 settled 된 상태면 새 세션을 만듦.
+    if (!session || session.settled) {
+        const winnerIndex = pickWinner(allowedIndices, restaurantCount);
+        session = {
+            sheetId,
+            sessionId: newSessionId(),
+            winnerIndex,
+            startedAt: now,
+            boostCount: 0,
+            idleTimer: null,
+            settled: false,
+        };
+        sessions.set(sheetId, session);
+        broker.broadcast(sheetId, {
+            type: "spin:start",
+            sessionId: session.sessionId,
+            startAt: now,
+        });
+        scheduleSettle(session);
+        return {sessionId: session.sessionId, isNew: true};
+    }
+
+    // 진행 중인 세션이면 부스트만.
+    session.boostCount += 1;
     broker.broadcast(sheetId, {
-      type: "spin:start",
-      sessionId: session.sessionId,
-      startAt: now,
+        type: "spin:boost",
+        sessionId: session.sessionId,
+        boostAt: now,
+        boostCount: session.boostCount,
     });
     scheduleSettle(session);
-    return { sessionId: session.sessionId, isNew: true };
-  }
-
-  // 진행 중인 세션이면 부스트만.
-  session.boostCount += 1;
-  broker.broadcast(sheetId, {
-    type: "spin:boost",
-    sessionId: session.sessionId,
-    boostAt: now,
-    boostCount: session.boostCount,
-  });
-  scheduleSettle(session);
-  return { sessionId: session.sessionId, isNew: false };
+    return {sessionId: session.sessionId, isNew: false};
 }
