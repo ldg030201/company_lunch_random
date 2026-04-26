@@ -18,12 +18,25 @@ export const emptyFilter: FilterState = {
     minDaysSinceVisit: null,
 };
 
+// 시트 셀에 "밥, 면, 튀김"처럼 쉼표로 구분된 다중값이 들어있을 수 있음.
+// trim 후 빈 문자열 제거. 단일값이면 길이 1 배열을 돌려줌.
+function splitMulti(value: string): string[] {
+    return value
+        .split(",")
+        .map((s) => s.trim())
+        .filter((s) => s.length > 0);
+}
+
 export function filterRestaurants(items: Restaurant[], f: FilterState): Restaurant[] {
+    const matchesAny = (raw: string, selected: Set<string>): boolean => {
+        // 식당의 셀 값 중 하나라도 선택된 칩과 일치하면 통과.
+        return splitMulti(raw).some((part) => selected.has(part));
+    };
     return items.filter((r) => {
-        if (f.country.size > 0 && !f.country.has(r.country)) return false;
-        if (f.category.size > 0 && !f.category.has(r.category)) return false;
-        if (f.foodType.size > 0 && !f.foodType.has(r.foodType)) return false;
-        if (f.locationArea.size > 0 && !f.locationArea.has(r.locationArea)) return false;
+        if (f.country.size > 0 && !matchesAny(r.country, f.country)) return false;
+        if (f.category.size > 0 && !matchesAny(r.category, f.category)) return false;
+        if (f.foodType.size > 0 && !matchesAny(r.foodType, f.foodType)) return false;
+        if (f.locationArea.size > 0 && !matchesAny(r.locationArea, f.locationArea)) return false;
         if (f.minDaysSinceVisit != null) {
             // daysSinceVisit이 null이면 "한 번도 안 간 곳" → "N일 이상" 조건을 항상 통과시킴.
             if (r.daysSinceVisit != null && r.daysSinceVisit < f.minDaysSinceVisit) return false;
@@ -32,11 +45,14 @@ export function filterRestaurants(items: Restaurant[], f: FilterState): Restaura
     });
 }
 
+// 다중값이 들어있는 셀을 split해서 개별 옵션으로 펼침.
+// 예) "밥, 면, 튀김" → 칩 3개("밥", "면", "튀김")로 노출.
 function distinctValues(items: Restaurant[], key: keyof Restaurant): string[] {
     const set = new Set<string>();
     for (const r of items) {
         const v = r[key];
-        if (typeof v === "string" && v.length > 0) set.add(v);
+        if (typeof v !== "string" || v.length === 0) continue;
+        for (const part of splitMulti(v)) set.add(part);
     }
     return Array.from(set).sort((a, b) => a.localeCompare(b, "ko"));
 }
