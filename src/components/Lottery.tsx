@@ -258,7 +258,7 @@ export default function Lottery({sheetId, onDisconnect}: Props) {
                                 whileTap={{scale: 0.93}}
                                 className="rounded-full bg-gradient-to-r from-amber-400 to-pink-500 px-10 py-4 text-lg font-bold text-slate-900 shadow-lg shadow-amber-500/30 transition hover:scale-105 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:scale-100"
                             >
-                                {eligible.length === 0 ? "조건에 맞는 식당 없음" : "🎰 뽑기 (연타!)"}
+                                {eligible.length === 0 ? "조건에 맞는 식당 없음" : "🎰 뽑기"}
                             </motion.button>
                         </div>
                     </>
