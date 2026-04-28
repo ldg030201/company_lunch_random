@@ -198,6 +198,15 @@ export default function Lottery({sheetId, onDisconnect}: Props) {
                                 "🔄 동기화"
                             )}
                         </button>
+                        <a
+                            href={`https://docs.google.com/spreadsheets/d/${encodeURIComponent(sheetId)}/edit`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="rounded-full bg-white/10 px-3 py-1 text-xs text-white transition hover:bg-white/20"
+                            title="원본 Google Sheets를 새 탭에서 열기"
+                        >
+                            📊 시트 보기
+                        </a>
                         <button
                             onClick={copyShareLink}
                             className="rounded-full bg-white/10 px-3 py-1 text-xs text-white transition hover:bg-white/20"
@@ -270,8 +279,11 @@ export default function Lottery({sheetId, onDisconnect}: Props) {
 
 function WinnerCard({winner}: { winner: Restaurant }) {
     const tags = [winner.country, winner.category, winner.foodType].filter((v) => v);
+    // 시트 F열(위치 상세)이 URL이면 그 링크를 우선 사용. 그 외(예: "카카오맵" 같은 라벨)
+    // 일 때만 식당 이름 + 위치로 카카오맵 검색 URL을 새로 만듦.
     const mapQuery = [winner.name, winner.locationArea].filter(Boolean).join(" ");
-    const mapUrl = `https://map.kakao.com/?q=${encodeURIComponent(mapQuery)}`;
+    const mapUrl =
+        winner.mapUrl ?? `https://map.kakao.com/?q=${encodeURIComponent(mapQuery)}`;
 
     return (
         <div
